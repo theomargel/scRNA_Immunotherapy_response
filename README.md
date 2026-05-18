@@ -79,4 +79,6 @@ This script integrates the bulk transcriptomics data and builds the 13BM predict
 ## Citation
 Please cite the following paper if you use this code or the 13BM signature in your research:
 
-
+Integrative single-cell profiling of melanoma reveals a tumor microenvironment signature predictive of immunotherapy response
+Theodoros Margelos, Ioanna Mina, Aggeliki Tserga, Eirini Goula, Sophia Kondylis, Antonia Vlahou, Maria Frantzi
+medRxiv 2026.05.13.26352980; doi: https://doi.org/10.64898/2026.05.13.26352980
