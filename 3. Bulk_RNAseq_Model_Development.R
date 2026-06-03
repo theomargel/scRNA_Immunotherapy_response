@@ -1,7 +1,5 @@
 library(verification)
 library(readODS)
-library(readxl)
-library(dplyr)
 library(DESeq2)
 library(ggplot2)
 library(sva)
@@ -10,13 +8,149 @@ library(caret)
 library(psych)
 library(openxlsx)
 library(readxl)
-library(dplyr)
+library(org.Hs.eg.db)
+library(biomaRt)
 
 #SET PATHS  data where downloaded by the servers mentioned in the Data Availability section
 input_dir <- "C:/dummy_path/input/"
 output_dir <- "C:/dummy_path/output/"
 
+#  Hugo Data Preparation
+HugoMetadata <- read.xlsx(paste0(input_dir, "Hugo/Metadata.xlsx"))
+
+Hugo <- read.delim2("Hugo/GSE78220_raw_counts_GRCh38.p13_NCBI.tsv")
+Hugo$GeneID <- as.character(Hugo$GeneID)
+# Connect to Ensembl BioMart
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+# Perform the mapping
+mapping <- getBM(
+  attributes = c("entrezgene_id", "hgnc_symbol"),
+  filters = "entrezgene_id",
+  values = Hugo$GeneID,
+  mart = ensembl)
+
+colnames(mapping)[1] <- colnames(Hugo)[1]
+mapping$GeneID <- as.character(mapping$GeneID)
+
+Hugo_2 <- left_join(Hugo, mapping, by="GeneID")
+Hugo_2 <- Hugo_2[complete.cases(Hugo_2$hgnc_symbol),]
+Hugo_2 <- Hugo_2[Hugo_2$hgnc_symbol!="",]
+Hugo_3 <- Hugo_2[,c(30,2:29)]
+colnames(Hugo_3)[1] <- "Symbol"
+
+sum(duplicated(Hugo_3$Symbol))
+Hugo_3$mean <- apply(Hugo_3[,-1], 1, mean)
+Hugo_filtered <- Hugo_3 %>%
+  group_by(Symbol) %>%                
+  slice_max(mean, n = 1) %>%           
+  ungroup() 
+
+Hugo_filtered_dup <- Hugo_filtered[(duplicated(Hugo_filtered$Symbol) | duplicated(Hugo_filtered$Symbol, fromLast = TRUE)),]
+
+# All remaining duplicates (n=30) have either 100% missing values or very low counts, we discard them in the next line
+Hugo_filtered <- Hugo_filtered[!duplicated(Hugo_filtered$Symbol),]
+Hugo_filtered <- Hugo_filtered[,-ncol(Hugo_filtered)] # discards the mean column (last one)
+
+write.xlsx(Hugo_filtered, "Hugo/clean/GSE78220_raw_counts_GRCh38NCBI_cleaned.xlsx")
+HugoCounts <- read.xlsx(paste0(input_dir, "Hugo/clean/GSE78220_raw_counts_GRCh38NCBI_cleaned.xlsx"))
+rownames(HugoCounts) <- HugoCounts$Symbol
+HugoCounts$Symbol <- NULL
+
+
+# Hugo Metadata from S1A (response was assessed as CR/PR = R, SD/PD = NR)
+
+HugoMetadata$Study <- "Hugo"
+HugoMetadata$Response <- HugoMetadata$Binary.Response
+HugoMetadata$Unique.Sample.ID <- HugoMetadata$Run 
+
+# Hossain Data Preparation
+HossainCounts <- read.delim2(paste0(input_dir, "Hossain/GSE213145_raw_counts_GRCh38.p13_NCBI.tsv"))
+HossainMetadata <- read.xlsx(paste0(input_dir, "Hossain/metadata.xlsx"))
+
+gene_symbols <- mapIds(org.Hs.eg.db,
+                       keys = as.character(Hossain_Counts$GeneID), 
+                       column = "SYMBOL",                         
+                       keytype = "ENTREZID")                   
+
+Hossain_Counts$Symbol <- gene_symbols
+Hossain_Counts <- Hossain_Counts[!is.na(Hossain_Counts$Symbol),]
+
+
+count_cols <- setdiff(names(Hossain_Counts), c("GeneID", "Symbol"))
+Hossain_Counts$Mean_Expression <- rowMeans(Hossain_Counts[, count_cols], na.rm = TRUE)
+Hossain_Counts <- Hossain_Counts[order(Hossain_Counts$Symbol, -Hossain_Counts$Mean_Expression), ]  
+Hossain_Counts <- Hossain_Counts[!duplicated(Hossain_Counts$Symbol), ]
+rownames(Hossain_Counts) <- Hossain_Counts$Symbol
+Hossain_Counts$GeneID <- NULL
+Hossain_Counts$Mean_Expression <- NULL
+Hossain_Counts <- Hossain_Counts[, c("Symbol", setdiff(names(Hossain_Counts), "Symbol"))]
+# Metadata was assessed from the Supplementary Table 1 of the original publication: https://doi.org/10.1016/j.canlet.2025.217638
+HossainMetadata$Study <- "Hossain"
+HossainMetadata$Response <- HossainMetadata$Response.based.on.RECIST
+HossainMetadata$Unique.Sample.ID <- HossainMetadata$Sample.Unique.ID
+
+# Riaz Data Preparation
+Riaz <- read.delim("D:/Bioprojects/ICB/Transcriptomics/Riaz/GSE91061_raw_counts_GRCh38.p13_NCBI.tsv")
+Riaz$GeneID <- as.character(Riaz$GeneID)
+
+# samples "GSM2420320" and "GSM2420319" belong to the same patient, keep one of them with the highest sum
+sum(Riaz[,colnames(Riaz)=="GSM2420320"]) # = 44200596 read counts
+sum(Riaz[,colnames(Riaz)=="GSM2420319"]) # = 47161172 read counts
+
+Riaz <- Riaz[,-which(colnames(Riaz)=="GSM2420320")]
+
+library(biomaRt)
+# Connect to Ensembl BioMart
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+# Perform the mapping
+mapping <- getBM(
+  attributes = c("entrezgene_id", "hgnc_symbol"),
+  filters = "entrezgene_id",
+  values = Riaz$GeneID,
+  mart = ensembl
+)
+
+colnames(mapping)[1] <- colnames(Riaz)[1]
+mapping$GeneID <- as.character(mapping$GeneID)
+
+
+Riaz_2 <- left_join(Riaz, mapping, by="GeneID")
+Riaz_2 <- Riaz_2[complete.cases(Riaz_2$hgnc_symbol),]
+Riaz_2 <- Riaz_2[Riaz_2$hgnc_symbol!="",]
+Riaz_3 <- Riaz_2[,c(110,2:109)]
+colnames(Riaz_3)[1] <- "Symbol"
+Riaz_3$mean <- apply(Riaz_3[,-1], 1, mean)
+Riaz_filtered <- Riaz_3 %>%
+  group_by(Symbol) %>%                
+  slice_max(mean, n = 1) %>%           
+  ungroup() 
+
+Riaz_filtered_dup <- Riaz_filtered[(duplicated(Riaz_filtered$Symbol) | duplicated(Riaz_filtered$Symbol, fromLast = TRUE)),]
+
+# All remaining duplicates (n=28) have either 100% missing values or very low counts, we discard them in the next line
+Riaz_filtered <- Riaz_filtered[!duplicated(Riaz_filtered$Symbol),]
+
+Riaz_filtered <- Riaz_filtered[,-ncol(Riaz_filtered)] # discards the mean column (last one)
+write.xlsx(Riaz_filtered, "Riaz/clean/GSE91061_raw_counts_GRCh38NCBI_cleaned.xlsx")
+RiazCounts <- read.xlsx(paste0(input_dir, "Riaz/clean/GSE91061_raw_counts_GRCh38NCBI_cleaned.xlsx"))
+# clinical data from github:  https://github.com/riazn/bms038_analysis/tree/master/data (file SampleTableCorrected.9.19.16.csv). 
+RiazMetadata <- read.xlsx(paste0(input_dir, "Riaz/GSE91061_metadata.xlsx"))
+
+rownames(RiazCounts) <- RiazCounts$Symbol
+RiazCounts$Symbol <- NULL
+RiazMetadata$Study <- "Riaz"
+RiazMetadata <- RiazMetadata[RiazMetadata$`Binary.Response.(CRPR/SDPD)` != "NE" & RiazMetadata$Sample.collection == "PRE",]
+RiazMetadata$Response <- RiazMetadata$`Binary.Response.(CRPR/SDPD)`
+RiazMetadata$Unique.Sample.ID <- RiazMetadata$UniqueSampleID
+
+ptsf_riaz <- intersect(RiazMetadata$Unique.Sample.ID, colnames(RiazCounts))
+RiazCounts <- RiazCounts[, ptsf_riaz]
+RiazMetadata <- RiazMetadata[RiazMetadata$Unique.Sample.ID %in% ptsf_riaz,]
+
 #  Trilla-Fuertes Data Preparation
+#The Fastq files were downloaded from the ArrayExpress repository ( link : https://www.ebi.ac.uk/biostudies/ArrayExpress/studies/E-MTAB-11729) . The fastq files were checked with Fastqc tool via Unix code, and were of high quality,
+#so no trimming needed to be performed. Then the fastq files where inserted into Galaxy server  and were processed into Bam format using HISAT2 and then after the alignment were transposed to RNA counts tables with FeatureCounts function. 
 TrillaCounts <- read.xlsx(paste0(input_dir, "Trilla/RNA_raw_clean_counts.xlsx"))
 TrillaMetadata <- read.xlsx(paste0(input_dir, "Trilla/metadata_Trilla_Fuertes.xlsx"))
 
@@ -30,42 +164,6 @@ TrillaMetadata <- TrillaMetadata[!is.na(TrillaMetadata$Response),]
 ptsf_trilla <- intersect(TrillaMetadata$Unique.Sample.ID, colnames(TrillaCounts))
 TrillaCounts <- TrillaCounts[, ptsf_trilla]
 TrillaMetadata <- TrillaMetadata[TrillaMetadata$Unique.Sample.ID %in% ptsf_trilla,]
-
-#  Hugo Data Preparation
-HugoMetadata <- read.xlsx(paste0(input_dir, "Hugo/Metadata.xlsx"))
-HugoCounts <- read.xlsx(paste0(input_dir, "Hugo/clean/GSE78220_raw_counts_GRCh38NCBI_cleaned.xlsx"))
-
-rownames(HugoCounts) <- HugoCounts$Symbol
-HugoCounts$Symbol <- NULL
-HugoMetadata$Study <- "Hugo"
-HugoMetadata$Response <- HugoMetadata$Binary.Response
-HugoMetadata$Unique.Sample.ID <- HugoMetadata$Run 
-
-# Hossain Data Preparation
-HossainCounts <- read.xlsx(paste0(input_dir, "Hossain/Raw_Clean_Counts.xlsx"))
-HossainMetadata <- read.xlsx(paste0(input_dir, "Hossain/Metadata_Hossain.xlsx"))
-
-rownames(HossainCounts) <- HossainCounts$Symbol
-HossainCounts$Symbol <- NULL
-HossainMetadata$Study <- "Hossain"
-HossainMetadata$Response <- HossainMetadata$Response.based.on.RECIST
-HossainMetadata$Unique.Sample.ID <- HossainMetadata$Sample.Unique.ID
-
-# Riaz Data Preparation
-RiazMetadata <- read.xlsx(paste0(input_dir, "Riaz/GSE91061_metadata.xlsx"))
-RiazCounts <- read.xlsx(paste0(input_dir, "Riaz/clean/GSE91061_raw_counts_GRCh38NCBI_cleaned.xlsx"))
-
-rownames(RiazCounts) <- RiazCounts$Symbol
-RiazCounts$Symbol <- NULL
-RiazMetadata$Study <- "Riaz"
-RiazMetadata <- RiazMetadata[RiazMetadata$`Binary.Response.(CRPR/SDPD)` != "NE" & RiazMetadata$Sample.collection == "PRE",]
-RiazMetadata$Response <- RiazMetadata$`Binary.Response.(CRPR/SDPD)`
-RiazMetadata$Unique.Sample.ID <- RiazMetadata$UniqueSampleID
-
-ptsf_riaz <- intersect(RiazMetadata$Unique.Sample.ID, colnames(RiazCounts))
-RiazCounts <- RiazCounts[, ptsf_riaz]
-RiazMetadata <- RiazMetadata[RiazMetadata$Unique.Sample.ID %in% ptsf_riaz,]
-
 
 
 common_genes <- Reduce(intersect, list(rownames(RiazCounts), rownames(HugoCounts), rownames(HossainCounts), rownames(TrillaCounts)))
