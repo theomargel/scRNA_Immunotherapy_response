@@ -394,6 +394,8 @@ study_mel_tis <- DimPlot(fil_seurat_merged, reduction = "umap_harmony_pat", grou
   ylab("UMAP2")
 ggsave("C:/Users/Supplementary_Figure1A.bmp", plot = study_mel_tis, width = 8, height = 6, dpi = 300)
 #Create the PSEUDOBULK objects
+  fil_seurat_merged$Patient_celltype1 <- paste(fil_seurat_merged$Patient, fil_seurat_merged$cell.type_m1, sep = "_")
+                                  
 cell_type_patient_pseudob <- AggregateExpression(fil_seurat_merged, assays = "RNA",return.seurat = T, group.by = c("Patient_celltype1","Response","cell.type_m1",
                                                                                                                    "Study"))
 Idents(cell_type_patient_pseudob) <- "cell.type_m1"
