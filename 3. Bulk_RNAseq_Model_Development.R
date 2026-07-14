@@ -717,4 +717,250 @@ sheets <- list(
 )
 
 write_xlsx(sheets, "supplementary_table_6.xlsx")
+
+
+library(TCGAbiolinks)
+library(SummarizedExperiment)
+library(tidyr)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+ library(survival)
+library(patchwork)
+ 
+
+# Download TCGA-SKCM RNA-seq data
+query_exp <- GDCquery(
+  project = "TCGA-SKCM",
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  workflow.type = "STAR - Counts"
+)
+GDCdownload(query_exp)
+expdat <- GDCprepare(query_exp)
+
+saveRDS(expdat, file = "expdat_SKCM.rds")
+
+
+# Load saved RNA-seq data
+expdat <- readRDS("expdat_SKCM.rds")
+
+# Extract sample-level metadata
+sample_metadata_raw <- as.data.frame(colData(expdat))
+
+# Curate metadata for downstream analysis
+sample_metadata <- sample_metadata_raw %>%
+  tibble::rownames_to_column("rna_barcode") %>%
+  dplyr::mutate(
+    patient_id = substr(rna_barcode, 1, 12),
+    sample_barcode = substr(rna_barcode, 1, 16),
+    OS_event = dplyr::case_when(
+      vital_status == "Dead" ~ 1L,
+      vital_status == "Alive" ~ 0L,
+      TRUE ~ NA_integer_
+    ),
+    OS_days = dplyr::case_when(
+      OS_event == 1L ~ as.numeric(days_to_death),
+      OS_event == 0L ~ as.numeric(days_to_last_follow_up),
+      TRUE ~ NA_real_
+    ),
+    OS_days = dplyr::if_else(OS_days >= 0, OS_days, NA_real_)
+  ) %>%
+  dplyr::select(
+    rna_barcode,
+    patient_id,
+    sample_barcode,
+    sample_type,
+    sample_type_id,
+    shortLetterCode,
+    tissue_type,
+    primary_diagnosis,
+    age_at_diagnosis,
+    gender,
+    ajcc_pathologic_stage,
+    ajcc_pathologic_t,
+    ajcc_pathologic_n,
+    ajcc_pathologic_m,
+    vital_status,
+    days_to_death,
+    days_to_last_follow_up,
+    OS_event,
+    OS_days
+  )
+write.xlsx(sample_metadata , "TCGA_meta.xlsx")
+#read after the removal of the patients with an additional sample, after we kept the metastatic one
+metadataTCGA  <- read.xlsx("TCGA_meta.xlsx")
+
+# Load saved mutation data
+#maf_data <- readRDS("C:/Users/mdeli/Desktop/BRFAA/TCGA_project/maf_SKCM.rds")
+
+## Build expression count matrix with gene symbols ########
+exp_matrix <- assay(expdat)
+
+clean_ensembl_ids <- gsub("\\..*$", "", rownames(exp_matrix))
+
+gene_symbols <- mapIds(
+  org.Hs.eg.db,
+  keys = clean_ensembl_ids,
+  column = "SYMBOL",
+  keytype = "ENSEMBL",
+  multiVals = "first"
+)
+
+rownames(exp_matrix) <- gene_symbols
+exp_matrix <- exp_matrix[!is.na(rownames(exp_matrix)), , drop = FALSE]
+
+#exp_matrix <- rowsum(exp_matrix, group = rownames(exp_matrix))
+
+exp_matrix_fil <- as.data.frame(exp_matrix[,colnames(exp_matrix) %in% metadataTCGA$sample_barcode])
+
+
+exp_matrix_fil$Mean_Expression <- rowMeans(exp_matrix_fil, na.rm = TRUE)
+
+
+#exp_matrix_fil <- exp_matrix_fil[exp_matrix_fil$Mean_Expression > 10, ]
+exp_matrix_fil$Mean_Expression <- NULL
+
+rownames(metadataTCGA) = metadataTCGA$sample_barcode
+
+stopifnot(identical(colnames(exp_matrix_fil), rownames(metadataTCGA)))
+
+
+dds <- DESeqDataSetFromMatrix(
+  countData = exp_matrix_fil,
+  colData   = metadataTCGA,
+  design    = ~ 1
+)
+dds <- DESeq(dds)
+
+data_norm <- counts(dds, normalized = TRUE)
+
+de_deseq2 <- as.data.frame(results(dds))
+
+
+
+# Target list (13BM)
+genes13BM <- c("LGALS1", "UHRF2", "LINGO1", "SELL", "CD96", "EPB41", 
+               "MPRIP", "IKZF1", "TLR10", "ST6GAL1", "ALDH5A1", "PDGFRB", "PLEC")
+
+metadata_cox <- metadataTCGA %>%
+  mutate(
+    OS.time  = as.numeric(time_to_event_days),
+    OS.event = as.numeric(event)
+  )  
+
+
+
+library(survival)
+
+genes13BM <- c(
+  "LGALS1", "UHRF2", "LINGO1", "SELL", "CD96", "EPB41",
+  "MPRIP", "IKZF1", "TLR10", "ST6GAL1", "ALDH5A1",
+  "PDGFRB", "PLEC"
+)
+
+# Define the weights from your model output
+weights <- c(
+  CD96 = 5.507e-04, SELL = 1.489e-04, EPB41 = -4.547e-06, 
+  LINGO1 = -2.103e-03, UHRF2 = -2.076e-03, LGALS1 = 2.069e-05, 
+  PDGFRB = -1.243e-03, PLEC = -4.671e-05, ST6GAL1 = 3.589e-04, 
+  TLR10 = -1.511e-04, IKZF1 = -1.031e-03, MPRIP = -1.223e-03, 
+  ALDH5A1 = 3.846e-03
+)
+intercept <- 2.086e+00
+
+exp_matrix_score <- t(data_norm[genes13BM, ])
+
+
+sample_scores <- (exp_matrix_score %*% weights[genes13BM]) + intercept
+
+probs <- 1 / (1 + exp(-sample_scores))
+summary(probs)
+hist(probs, breaks = 30)
+
+
+
+
+
+
+
+library(survival)
+library(survminer)
+
+# --- Score-based quartile split ---
+medianscore <- quantile(sample_scores, 0.5)
+#q75score <- quantile(sample_scores, 0.5)
+
+metadata_cox$score <- as.numeric(sample_scores[rownames(metadata_cox), ])
+
+df_cox <- metadata_cox %>%
+  #  filter(score <= medianscore | score >= q75score) %>%
+  mutate(Group = factor(ifelse(score >= medianscore, "High", "Low"), levels = c("Low", "High")))
+
+# --- Cox analysis ---
+# --- Cox analysis ---
+fit_cox <- coxph(Surv(OS.time, OS.event) ~ Group, data = df_cox)
+s <- summary(fit_cox)
+
+cox_score_result <- data.frame(
+  HR       = s$coefficients["GroupHigh", "exp(coef)"],
+  Lower95  = s$conf.int["GroupHigh", "lower .95"],
+  Upper95  = s$conf.int["GroupHigh", "upper .95"],
+  p.value  = s$coefficients["GroupHigh", "Pr(>|z|)"],
+  C_Index  = as.numeric(s$concordance[1]),  # Safely extracts the concordance value index  N        = nrow(df_cox),
+  row.names = "GroupHigh"
+)
+print(cox_score_result)
+ 
+# --- Kaplan-Meier plot ---
+fit_km <- survfit(Surv(OS.time, OS.event) ~ Group, data = df_cox)
+
+
+
+
+km <- ggsurvplot(
+  fit_km,
+  data = df_cox,
+  palette = c("#2E75B6", "#C00000"),
+  conf.int = TRUE,
+  risk.table = FALSE,
+  pval = paste0("Log-rank ", p),
+  pval.method = FALSE,
+  xscale = 30.4375,
+  xlim = c(0, 4500),
+  break.time.by = 365,
+  xlab = NULL,
+  ylab = NULL,
+  legend.labs = c("Low (≤ median)", "High (> median)"),
+  legend.title = "Model Score",
+  ggtheme = theme_classic(base_size = 14)
+)
+
+km$plot <- km$plot +
+  scale_x_continuous(
+    breaks = seq(0, 4500, by = 365.25),
+    labels = c(0, 12, 24, 36, 48, 60, 72, 84, 96, 108, 120, 132, 144)
+  ) +
+  theme(
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.8),
+    axis.line = element_line(colour = "black"),
+    axis.text = element_text(size = 12, colour = "black"),
+    axis.title = element_text(size = 13, face = "bold"),
+    legend.position = c(0.82, 0.90),
+    legend.background = element_blank(),
+    legend.key = element_blank(),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+# Display
+km
+
+# Save
+ggsave(
+  filename = "C:\\Figure4b.png",
+  plot = km$plot,
+  width = 6,
+  height = 6,
+  units = "in",
+  dpi = 300
+)
+                                
  
