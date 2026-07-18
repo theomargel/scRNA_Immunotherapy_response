@@ -34,7 +34,7 @@ This script handles the processing of the primary melanoma scRNA-seq discovery c
      
 **Supplementary Figure 1A,B:** Study distribution and PTPRC (CD45+) expression UMAPs.
      
-  **Supplementary Figure 2A:** Heatmap showcasing the top differentially expressed marker genes used to validate the identity of each assigned cell type in the discovery cohort.
+  **Supplementary Figure 3A:** Heatmap showcasing the top differentially expressed marker genes used to validate the identity of each assigned cell type in the discovery cohort.
   
 **Supplementary Table 1:** Pseudobulk DE results (Rs vs NRs) per cell type.
     
@@ -52,7 +52,7 @@ This script validates findings in the independent Sade-Feldman et al. scRNA-seq 
 
  **Figure 2B:** UMAP of the single-cell validation cohort.
     
-**Supplementary Figure 2B:** Heatmap showcasing the top differentially expressed marker genes used to validate the identity of each assigned cell type in the validation cohort.
+**Supplementary Figure 3B:** Heatmap showcasing the top differentially expressed marker genes used to validate the identity of each assigned cell type in the validation cohort.
     
  **Supplementary Table 2:** `limma` pseudobulk results for Rs vs NRs.
 
@@ -66,7 +66,9 @@ This script integrates the bulk transcriptomics data and builds the 13BM predict
 
 **Key Visuals Generated:**
 
-**Figure 4A-C:** ROC curves for the Melanoma training cohort, Bladder cancer validation, and low-TMB subgroup.
+**Figure 4A,C,D:** ROC curves for the Melanoma training cohort, Bladder cancer validation, and low-TMB subgroup.
+
+**Figure 4B:** Kaplan-Meier plot in the TCGA cohort, based on a 13BM score median split.
     
  **Figure 5:** Dot plots of Gene Set Overrepresentation Analysis (ORA) based on 13BM score correlations.
     
